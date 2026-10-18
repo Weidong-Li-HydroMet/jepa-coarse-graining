@@ -122,18 +122,6 @@ Each checkpoint stores the full model plus `probe_encoder` (the bare encoder use
 
 ---
 
-## Results: 8-phase RMM probe on active MJO days (`runs/compare/summary_metrics.csv`)
-
-| | linear acc | macro-F1 | kNN acc | NMI | ARI | silhouette | bin acc |
-|---|---|---|---|---|---|---|---|
-| V-JEPA | 0.797 | 0.797 | 0.635 | 0.346 | 0.200 | **0.079** | **0.809** |
-| AE | **0.938** | **0.937** | 0.609 | **0.431** | **0.267** | 0.034 | 0.668 |
-| Forecast | 0.888 | 0.887 | **0.641** | 0.331 | 0.193 | 0.038 | 0.724 |
-
-(Forecast is a third baseline: the same encoder and decoder trained to predict day `t+1`; see `FORECAST/`.)
-
----
-
 ## Layout
 
 ```
