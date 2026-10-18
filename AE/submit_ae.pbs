@@ -1,0 +1,75 @@
+#!/bin/bash
+# Production single-GPU training for the PhysAnchor-MJO-AE (Derecho A100).
+# Analogous to jepa/submit_vjepa.pbs: same conda python, same single-GPU request, same
+# anomaly cache.  Builds the cache if missing, trains, then runs all AE downstream on the
+# best checkpoint (for the AE the reconstruction val loss IS a valid selection signal).
+#
+# Submit:           qsub AE/submit_ae.pbs
+# Resume a crash:   qsub -v RESUME=1 AE/submit_ae.pbs     # continues from last.tar
+# Watch:            tail -f runs/ae/train.pbs.log
+#
+#PBS -N ae_train
+#PBS -A UCHI0018
+#PBS -q main
+#PBS -l select=1:ncpus=64:ngpus=4:gpu_type=a100
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/runs/ae/train.pbs.log
+
+set -euo pipefail
+export CUDA_VISIBLE_DEVICES=0          # single-GPU training (model is not sharded)
+
+PY=/glade/work/weidong/.conda_envs/2DTurbEmulator/bin/python
+ROOT=/glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO
+CFG=AE/config_ae.yaml
+cd "$ROOT"
+mkdir -p runs/ae
+
+step() { echo; echo "=== $* ==="; }
+fail() { echo "FAIL at: $*" >&2; exit 1; }
+
+step "env"
+echo "node      : $(hostname)"
+echo "started   : $(date)"
+echo "gpu       : $(nvidia-smi -L 2>/dev/null | head -1 || echo none)"
+$PY -c "import torch;print('torch     :',torch.__version__,'cuda',torch.cuda.is_available())"
+SECONDS=0
+
+# ---- 1. anomaly cache (shared with V-JEPA; build once if missing) ---------------------
+if [ ! -f data/anom_st/anom.npy ]; then
+  step "[1/6] preprocess (build shared anomaly cache)"
+  $PY -m jepa.data.preprocess --config jepa/config_vjepa.yaml || fail preprocess
+else
+  echo; echo "=== [1/6] preprocess: shared cache present, skipping ==="
+fi
+
+# ---- 2. train (AMP, cosine LR, best/last checkpoints) ---------------------------------
+step "[2/6] train AE"
+RESUME_ARG=""
+if [ "${RESUME:-0}" = "1" ] && [ -f runs/ae/last.tar ]; then
+  RESUME_ARG="--resume runs/ae/last.tar"
+  echo "resuming from runs/ae/last.tar"
+fi
+$PY AE/train_ae.py --config "$CFG" $RESUME_ARG || fail train
+
+# ---- downstream checkpoint: best.tar = min reconstruction val loss --------------------
+CKPT=runs/ae/best.tar
+[ -f "$CKPT" ] || CKPT=runs/ae/last.tar
+echo; echo "downstream checkpoint: $CKPT"
+
+step "[3/6] extract daily latents"
+$PY -m AE.downstream.extract  --ckpt "$CKPT"  || fail extract
+
+step "[4/6] phase anatomy (SOM 4x2 -> 6 + k-means k=6)"
+$PY -m AE.downstream.phases   --ckpt "$CKPT"  || fail phases
+
+step "[5/6] decoupled pattern-correlation monitoring vs RMM"
+$PY -m AE.downstream.monitor  --ckpt "$CKPT"  || fail monitor
+
+step "[6/6] AE vs V-JEPA comparison"
+$PY -m AE.downstream.compare  --ae_ckpt "$CKPT" --jepa_dir runs/vjepa || fail compare
+
+step "DONE"
+echo "finished  : $(date)"
+printf 'elapsed   : %02d:%02d:%02d\n' $((SECONDS/3600)) $((SECONDS%3600/60)) $((SECONDS%60))
+echo "=== AE_PIPELINE_DONE ==="

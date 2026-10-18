@@ -1,0 +1,64 @@
+# PhysAnchor-MJO-AE — configuration (a reconstruction-AE baseline matched to V-JEPA).
+#
+# HARD CONSTRAINTS (apples-to-apples with jepa/config_vjepa.yaml):
+#   * the `data:` and `encoder:` blocks below are copied VERBATIM from
+#     jepa/config_vjepa.yaml, so the AE consumes byte-identical samples and uses the
+#     SAME STViTBackbone encoder (same patch/tubelet, depth, width).
+#   * method.latent_dim is pinned to encoder.embed_dim (192) — NOT the paper's 1024.
+# No absolute paths appear in the training logic; everything is read from here.
+
+# ---- data: copied verbatim from jepa/config_vjepa.yaml ---------------------------------
+data:
+  data_root:  /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/data
+  cache_dir:  /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/data/anom_st
+  rmm_csv:    /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/data/rmm_computed.csv
+  lat_band:   [15.0, -15.0]       # 15N -> 15S (descending); matches the RMM notebook
+  year_start: 1979
+  year_end:   2020
+  train_years: [1979, 2014]       # split by anchor-day year; documented in README
+  val_years:   [2015, 2020]
+  seq_len: 3                      # days per clip (t-2, t-1, t)
+
+# ---- encoder: copied verbatim from jepa/config_vjepa.yaml ------------------------------
+# Same STViTBackbone as V-JEPA. embed_dim = 192 IS the matched latent dimension.
+encoder:
+  img_size:   [13, 144]           # n_lat x n_lon at 2.5°, 15N-15S band
+  patch_size: [1, 8]              # (p_lat, p_lon): 13 lat rows x 18 lon patches (20° each)
+  num_frames: 3
+  in_chans:   3                   # olr, u850, u200
+  embed_dim:  192
+  depth:      6
+  num_heads:  4
+  mlp_ratio:  4.0
+  drop_path:  0.0
+
+# ---- decoder: lightweight; the paper's decoder "mirrors" the encoder back to pixels ----
+decoder:
+  dec_dim:    128                 # narrow decoder (encoder D=192); must be % 16 == 0
+  depth:      4
+  num_heads:  4
+  mlp_ratio:  4.0
+
+# ---- method: plain reconstruction AE (no masking, no EMA, no predictor) ----------------
+method:
+  name: ae
+  latent_dim: 192                 # MUST equal encoder.embed_dim (asserted in build) — NOT 1024
+  pool: current                   # 'current' (last-day tokens, matches V-JEPA embed_clip) | 'all'
+  target_day: last                # reconstruct day t (paper). 'last' (=t) | 'center' (=t-1)
+  loss_type: mse                  # mse (paper) | smooth_l1
+
+train:
+  seed: 0
+  device: cuda
+  amp: true
+  batch_size: 512
+  epochs: 500
+  lr: 5.0e-4
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  warmup_epochs: 5
+  grad_clip: 1.0
+  num_workers: 6
+  log_every: 50
+  eval_every: 1
+  out_dir: /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/runs/ae
