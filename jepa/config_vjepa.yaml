@@ -1,0 +1,55 @@
+# Spatiotemporal MJO V-JEPA — configuration.
+# No absolute paths appear in the training logic; everything is read from here.
+
+data:
+  data_root:  /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/data
+  cache_dir:  /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/data/anom_st
+  rmm_csv:    /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/data/rmm_computed.csv
+  lat_band:   [15.0, -15.0]       # 15N -> 15S (descending); matches the RMM notebook
+  year_start: 1979
+  year_end:   2020
+  train_years: [1979, 2014]       # split by anchor-day year; documented in README
+  val_years:   [2015, 2020]
+  seq_len: 3                      # days per clip (t-2, t-1, t)
+
+encoder:
+  img_size:   [13, 144]           # n_lat x n_lon at 2.5°, 15N-15S band
+  patch_size: [1, 8]              # (p_lat, p_lon): 13 lat rows x 18 lon patches (20° each)
+  num_frames: 3
+  in_chans:   3                   # olr, u850, u200
+  embed_dim:  192
+  depth:      6
+  num_heads:  4
+  mlp_ratio:  4.0
+  drop_path:  0.0
+
+mask:
+  mode: mixed                     # spatial | temporal | mixed | both
+  sector_width: [3, 6]            # masked longitude-patch columns (60-120° wide)
+  num_spatial_targets: 2
+  n_future: 1                     # trailing days hidden in the temporal task
+
+method:
+  name: vjepa
+  pred_dim: 96                    # narrow-ViT predictor (encoder D=192)
+  pred_depth: 4
+  pred_num_heads: 4
+  loss_type: smooth_l1            # smooth_l1 | mse  (latent-space)
+  var_coeff: 0.0                  # >0 turns on the VICReg variance hinge (anti-collapse)
+  ema_momentum: [0.996, 1.0]      # cosine schedule over training
+
+train:
+  seed: 0
+  device: cuda
+  amp: true
+  batch_size: 512
+  epochs: 500
+  lr: 5.0e-4
+  lr_min: 1.0e-6
+  weight_decay: 0.05
+  warmup_epochs: 5
+  grad_clip: 1.0
+  num_workers: 6
+  log_every: 50
+  eval_every: 1
+  out_dir: /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/runs/vjepa

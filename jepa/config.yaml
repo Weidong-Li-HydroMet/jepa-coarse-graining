@@ -1,0 +1,39 @@
+# I-JEPA — config. The `backbone:` and `data:` blocks MUST be byte-identical across
+# mae/dino/jepa (smoke_test asserts this — it is the fairness contract).
+
+backbone:
+  img_size: [32, 360]
+  patch_size: 4
+  in_chans: 3
+  embed_dim: 192
+  depth: 4
+  num_heads: 4
+  mlp_ratio: 4.0
+
+data:
+  data_dir: /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/data_daily
+  variables: [olr, u850, u200]
+  train_years: [1979, 2014]
+  val_years: [2015, 2019]
+
+method:
+  name: jepa
+  pred_dim: 96             # narrow-ViT predictor (paper: 384 wide for ViT-B; D=192 here)
+  pred_depth: 4
+  pred_num_heads: 4
+  num_targets: 4
+  target_scale: [0.15, 0.2]
+  target_aspect: [0.75, 1.5]
+  context_scale: [0.85, 1.0]
+  ema_momentum: [0.996, 1.0]   # linear in the paper; cosine here, matching DINO
+
+train:
+  seed: 0
+  device: cuda
+  batch_size: 64
+  epochs: 50
+  lr: 5.0e-4
+  weight_decay: 0.05
+  warmup_epochs: 3
+  num_workers: 4
+  out_dir: /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/runs/jepa

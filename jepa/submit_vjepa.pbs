@@ -1,0 +1,81 @@
+#!/bin/bash
+# Production single-GPU pretraining for the spatiotemporal MJO V-JEPA (Derecho A100).
+# Builds the anomaly cache if missing, trains (config: 100 epochs), then runs all
+# downstream on the FINAL EMA encoder.  Heavy steps run here (not the login node, whose
+# per-session 10 GB cgroup is shared with the IDE/Jupyter and OOM-kills preprocessing).
+#
+# Derecho allocates GPU nodes whole (4xA100); the model is single-GPU so we pin GPU 0.
+# Queue note: dev queues (gpudev/cpudev/casper) are denied for this allocation; use main/gpu.
+#
+# Submit:           qsub jepa/submit_vjepa.pbs
+# Resume a crash:   qsub -v RESUME=1 jepa/submit_vjepa.pbs     # continues from last.tar
+# Watch:            tail -f runs/vjepa/train.pbs.log
+#
+#PBS -N vjepa_train
+#PBS -A UCHI0018
+#PBS -q main
+#PBS -l select=1:ncpus=64:ngpus=4:gpu_type=a100
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/runs/vjepa/train.pbs.log
+
+set -euo pipefail
+export CUDA_VISIBLE_DEVICES=0          # single-GPU training (model is not sharded)
+
+PY=/glade/work/weidong/.conda_envs/2DTurbEmulator/bin/python
+ROOT=/glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO
+CFG=jepa/config_vjepa.yaml
+cd "$ROOT"
+mkdir -p runs/vjepa
+
+step() { echo; echo "=== $* ==="; }
+fail() { echo "FAIL at: $*" >&2; exit 1; }
+
+step "env"
+echo "node      : $(hostname)"
+echo "started   : $(date)"
+echo "gpu       : $(nvidia-smi -L 2>/dev/null | head -1 || echo none)"
+$PY -c "import torch;print('torch     :',torch.__version__,'cuda',torch.cuda.is_available())"
+SECONDS=0
+
+# ---- 1. anomaly cache (build once; ~15,222 days already cached -> skipped) -------------
+if [ ! -f data/anom_st/anom.npy ]; then
+  step "[1/5] preprocess (build anomaly cache)"
+  $PY -m jepa.data.preprocess --config "$CFG" || fail preprocess
+else
+  echo; echo "=== [1/5] preprocess: cache present, skipping ==="
+fi
+
+# ---- 2. pretrain (100 epochs, AMP, EMA, cosine LR) ------------------------------------
+step "[2/5] pretrain"
+RESUME_ARG=""
+if [ "${RESUME:-0}" = "1" ] && [ -f runs/vjepa/last.tar ]; then
+  RESUME_ARG="--resume runs/vjepa/last.tar"
+  echo "resuming from runs/vjepa/last.tar"
+fi
+$PY jepa/train_vjepa.py --config "$CFG" $RESUME_ARG || fail train
+
+# ---- downstream checkpoint --------------------------------------------------------------
+# Use last.tar = the FINAL EMA target encoder, NOT best.tar.  For latent-space JEPA the
+# val prediction loss is NOT a model-selection signal: as the EMA encoder enriches, its
+# representation (tgt_std) grows and the prediction target hardens, so val loss bottoms
+# out very early (~epoch 3, undertrained) and rises thereafter.  Selecting best.tar by
+# min-val-loss therefore picks the worst encoder; the epoch-99 encoder roughly doubles
+# phase-RMM ARI/NMI and adds ~0.09 propagation accuracy.  Prefer last.tar.
+CKPT=runs/vjepa/last.tar
+[ -f "$CKPT" ] || CKPT=runs/vjepa/best.tar
+echo; echo "downstream checkpoint: $CKPT"
+
+step "[3/5] extract daily embeddings"
+$PY -m jepa.downstream.extract     --ckpt "$CKPT"        || fail extract
+
+step "[4/5] phase clustering vs RMM (k=8)"
+$PY -m jepa.downstream.cluster     --ckpt "$CKPT" --k 8  || fail cluster
+
+step "[5/5] propagation classification"
+$PY -m jepa.downstream.propagation --ckpt "$CKPT"        || fail propagation
+
+step "DONE"
+echo "finished  : $(date)"
+printf 'elapsed   : %02d:%02d:%02d\n' $((SECONDS/3600)) $((SECONDS%3600/60)) $((SECONDS%60))
+echo "=== TRAIN_PIPELINE_DONE ==="

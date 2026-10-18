@@ -1,0 +1,34 @@
+#!/bin/bash
+# Short end-to-end verification on real data: preprocess -> brief train -> all downstream.
+# CPU dev node (the login session's 10 GB cgroup is shared with the IDE and too full).
+#PBS -N vjepa_verify
+#PBS -A UCHI0018
+#PBS -q main
+#PBS -l select=1:ncpus=128:ompthreads=64
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -o /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/runs/vjepa/verify.pbs.log
+
+export OMP_NUM_THREADS=64
+PY=/glade/work/weidong/.conda_envs/2DTurbEmulator/bin/python
+ROOT=/glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO
+cd "$ROOT"
+mkdir -p runs/vjepa
+echo "=== node: $(hostname)  cpus: $(nproc) ==="
+
+echo "=== [1/5] preprocess ==="
+$PY -m jepa.data.preprocess --config jepa/config_vjepa.yaml || { echo PREPROCESS_FAIL; exit 1; }
+
+echo "=== [2/5] short training (8 epochs, CPU) ==="
+$PY jepa/train_vjepa.py --config jepa/config_vjepa.yaml --epochs 8 || { echo TRAIN_FAIL; exit 1; }
+
+echo "=== [3/5] extract daily embeddings ==="
+$PY -m jepa.downstream.extract --ckpt runs/vjepa/best.tar || { echo EXTRACT_FAIL; exit 1; }
+
+echo "=== [4/5] phase clustering vs RMM ==="
+$PY -m jepa.downstream.cluster --ckpt runs/vjepa/best.tar --k 8 || { echo CLUSTER_FAIL; exit 1; }
+
+echo "=== [5/5] propagation classification ==="
+$PY -m jepa.downstream.propagation --ckpt runs/vjepa/best.tar || { echo PROP_FAIL; exit 1; }
+
+echo "=== VERIFY_DONE ==="

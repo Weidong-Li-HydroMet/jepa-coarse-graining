@@ -1,0 +1,22 @@
+#!/bin/bash
+# Downstream-only verification from an existing checkpoint (extract -> cluster -> propagation).
+#PBS -N vjepa_down
+#PBS -A UCHI0018
+#PBS -q main
+#PBS -l select=1:ncpus=128:ompthreads=64
+#PBS -l walltime=00:40:00
+#PBS -j oe
+#PBS -o /glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO/runs/vjepa/down.pbs.log
+
+export OMP_NUM_THREADS=64
+PY=/glade/work/weidong/.conda_envs/2DTurbEmulator/bin/python
+ROOT=/glade/campaign/univ/uchi0018/weidong/SSL_project/Self_supervised_learning/MJO
+cd "$ROOT"
+CKPT=runs/vjepa/best.tar
+[ -f "$CKPT" ] || CKPT=runs/vjepa/last.tar
+echo "=== node: $(hostname)  ckpt: $CKPT ==="
+
+echo "=== extract ===" ; $PY -m jepa.downstream.extract     --ckpt "$CKPT" || { echo EXTRACT_FAIL; exit 1; }
+echo "=== cluster ===" ; $PY -m jepa.downstream.cluster     --ckpt "$CKPT" --k 8 || { echo CLUSTER_FAIL; exit 1; }
+echo "=== prop ===" ;    $PY -m jepa.downstream.propagation --ckpt "$CKPT" || { echo PROP_FAIL; exit 1; }
+echo "=== DOWN_DONE ==="
